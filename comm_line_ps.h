@@ -132,11 +132,16 @@ public:
         }
         */
         //else {
-           m_Second = m_First;
-           m_Second_addr = m_First_addr;
-        //}
+        m_Second = m_First;
         m_First = tid;
+
+        m_Second_addr = m_First_addr;
+        //}
         m_First_addr = addr;
+    }
+
+    void updateFirst(THREADID tid) {
+        m_First = tid;
     }
 
     THREADID getFirst() {
@@ -155,12 +160,12 @@ public:
         return m_Second_addr;
     }
 
-    void invalidate() {
+    void setEmpty() {
         m_Addr = 0;
     }
 
-    bool isValid() {
-        return (m_Addr > 0 ? true : false);
+    bool isEmpty() {
+        return (m_Addr == 0 ? true : false);
     }
 
     void addEarl(THREADID tid, UINT32 n, UINT32 sz) {
@@ -343,7 +348,6 @@ public:
         }
     }
 
-
     CommLineProdCons getLineLazy(UINT64 line) {
         CommLineProdCons cand_cl = CommLineProdCons(line);
         auto it = setCommLPS.find(cand_cl);
@@ -351,9 +355,47 @@ public:
             return (*it);
             //return it;
         } else {
-            cand_cl.invalidate();
+            cand_cl.setEmpty();
             return cand_cl;
         }
+    }
+    
+    void updateCreateLine(UINT64 line, THREADID tid, UINT64 addr) {
+        CommLineProdCons cand = CommLineProdCons(line);
+        auto it = setCommLPS.find(cand);
+        if (it != setCommLPS.end()) {
+            const_cast<CommLineProdCons&> (*it).update(tid, addr);
+        }
+        else {
+            cand.update(tid, addr);
+            PIN_MutexLock(&setLock);
+            setCommLPS.insert(cand);
+            PIN_MutexUnlock(&setLock);
+        }
+    }
+    
+    void updateCreateLineBatch(UINT64 start, UINT64 addr, UINT32 len, THREADID tid) {
+        // Tid must be > 0, e.g, tid should be in tid+1 outside the function
+        //if (len > 1)
+        //    printf(" [L-%ld] update m_First %ld..%ld\n", start, start, start+len-1);
+        for (UINT64 line = start; line < start+len; ++line) {
+            CommLineProdCons cand = CommLineProdCons(line);
+            auto it = setCommLPS.find(cand);
+            if (it == setCommLPS.end()) {
+                // Not found, new insert
+                //cand.updateFirst(tid);
+                cand.update(tid, addr);
+                PIN_MutexLock(&setLock);
+                setCommLPS.insert(cand);
+                PIN_MutexUnlock(&setLock);
+            }
+            else if (tid != (*it).m_First) {
+                // Update only if current tid is different
+                //printf(" [L-%ld] update m_First %d -> %d\n", line, (*it).m_First, tid);
+                //const_cast<CommLineProdCons&> (*it).updateFirst(tid);
+                const_cast<CommLineProdCons&> (*it).update(tid, addr);
+            }
+        } 
     }
 
     void updateLine(UINT64 line, THREADID tid, UINT64 addr) {

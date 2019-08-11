@@ -588,6 +588,14 @@ public:
         updateTempo(a, b, tsc, dsize);
     }
 
+    void resetSpat() {
+        memset(countMatrix, 0, sizeof(countMatrix));
+        memset(sizeMatrix, 0, sizeof(sizeMatrix));
+        //memset(countMatrix, 0, (MAXTHREADS+1) * (MAXTHREADS+1) * sizeof(UINT64));
+        //memset(sizeMatrix, 0, (MAXTHREADS+1) * (MAXTHREADS+1) * sizeof(UINT64));
+        //memset(sizeMatrix, 0, sizeof(countMatrix[0][0]) * (MAXTHREADS+1) * (MAXTHREADS+1));
+    }
+
     void print_spat(map<UINT32, UINT32> pidmap, string name, int num_threads,
             int commsize) {
         //long n = 0;
@@ -636,6 +644,14 @@ public:
         f.close();
         fl.close();
     }
+    
+    void print_spat_interval(map<UINT32, UINT32> pidmap, string name, int num_threads,
+            int commsize) {
+        static long n = 0;
+        name = name + "." + decstr(n++);
+        print_spat(pidmap, name, num_threads, commsize);
+    }
+
 
     void print_tempo_interval(map<UINT32, UINT32> pidmap, string name, int num_threads,
             int commsize) {

@@ -995,7 +995,7 @@ VOID do_comm_ps(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
     
 }
 
-VOID do_comm_ps_simple(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
+VOID do_comm_ps_simple2(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
     if (num_threads < 2)
         return;
     
@@ -1023,6 +1023,48 @@ VOID do_comm_ps_simple(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) 
         //printf("  [L-%ld] w_op: %d, tid: %d, a: %d\n", line, w_op, tid, a);
     }
     
+}
+
+VOID do_comm_ps_simple(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
+    if (num_threads < 2)
+        return;
+    
+    UINT64 line = addr >> COMMSIZE;
+    THREADID tid = real_tid(pin_tid);
+
+     //Update mem accesses
+    add_mem_rw(tid, dsize, w_op);
+    
+    //CommLineProdCons clps;
+    //THREADID a;
+
+    if (w_op == true) {
+        // Only write op will update the detection line
+        UINT32 n_line = 1 + (dsize >> COMMSIZE);
+        //printf("[L-%ld] w_op: %d, tid: %d, dsize: %d, n_line: %d\n", line, w_op, tid, dsize, n_line);
+        commLPS.updateCreateLineBatch(line, addr, n_line, tid+1);
+        //printf("[L-%ld] w_op: %d, tid: %d, a: %d\n", line, w_op, tid, a);
+    }
+    else {
+        CommLineProdCons clps = commLPS.getLineLazy(line);
+        if (clps.isEmpty() == false) {
+            if (clps.getSecond_addr() != 0 && clps.getSecond_addr() <= addr) {
+                //printf("[L-%ld] w_op: %d, tid: %d, b: %d, b_addr: %ld\n", line, w_op, tid, clps.getSecond(), clps.getSecond_addr());
+                add_sp_ps(tid, clps.getSecond(), dsize);
+            }
+            else if (clps.getFirst_addr() <= addr) {
+                //printf("[L-%ld] w_op: %d, tid: %d, a: %d, a_addr: %ld\n", line, w_op, tid, clps.getFirst(), clps.getFirst_addr());
+                add_sp_ps(tid, clps.getFirst(), dsize);
+            }
+                
+            //if (clps.getFirst() != 0) {
+                // Still need to check because of the optimistic locking in getLine()
+            //    add_sp_ps(tid, clps.getFirst(), dsize);
+                //printf("  [L-%ld] w_op: %d, tid: %d, getFirst(): %d\n", line, w_op, tid, clps.getFirst());
+            //}
+
+        }
+    }
 }
 
 VOID do_comm_ss_rwx(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool t_w) {
@@ -1715,7 +1757,8 @@ VOID mythread(VOID * arg) {
         }
 
         if (DOCOMMPS || DOCOMMPSIMP) {
-            commTrace.print_spat(pidmap, img_name, num_threads, COMMSIZE);
+            commTrace.print_spat_interval(pidmap, img_name, num_threads, COMMSIZE);
+            commTrace.resetSpat();
         }
         
         if (DOCOMMSSRW) {
