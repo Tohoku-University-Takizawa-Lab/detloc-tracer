@@ -34,6 +34,7 @@
 #include "comm_line_set.h"
 #include "comm_line_set_rw.h"
 #include "comm_line_ps.h"
+#include "comm_line_prod_tb.h"
 
 //const int MAXTHREADS = 1024;
 unsigned int MYPAGESIZE;
@@ -71,6 +72,7 @@ KNOB<bool> DOCOMMSS (KNOB_MODE_WRITEONCE, "pintool", "s_set", "0", "enable com d
 KNOB<bool> DOCOMMSSRW (KNOB_MODE_WRITEONCE, "pintool", "s_set_rw", "0", "enable com detection, spatio using comm_line_set and prod/cons pattern (four window)");
 KNOB<bool> DOCOMMPS (KNOB_MODE_WRITEONCE, "pintool", "s_prod", "0", "enable com detection, spatio using prod/cons");
 KNOB<bool> DOCOMMPSIMP (KNOB_MODE_WRITEONCE, "pintool", "s_prod_simple", "0", "enable com detection, spatio using prod/cons");
+KNOB<bool> DOCOMMPRODTB (KNOB_MODE_WRITEONCE, "pintool", "s_prod_tb", "0", "enable com detection, spatio using prod/cons (thread_based)");
 KNOB<int> TRACEDELAY(KNOB_MODE_WRITEONCE, "pintool", "delay", "0", "Tracing delay (in ms)");
 
 //static uint32_t cpu_khz = 2400000;
@@ -145,6 +147,8 @@ CommLSet commLSet;
 CommLRWSet commLRWSet;
 // ProdCons
 CommLineProdConsSet commLPS;
+// ProdCons (thread-based)
+CommLineProdTBArr commLPTB;
 
 // mapping of cache line to a list of TIDs that previously accessed it
 unordered_map<UINT64, struct TIDlist> commmap;
@@ -274,10 +278,10 @@ VOID add_sp_ps_addr(THREADID a, THREADID b, UINT32 dsize, UINT64 a_addr, UINT64 
 
 VOID add_sp_ps(THREADID a, THREADID b, UINT32 dsize) {
     // a is the new one, b is the old one
-    if (a != b-1) {
+    //if (a != b-1) {
         //printf("    [PAIR] tid: %d, b: %d, a_addr: %ld, b_addr: %ld\n", a, b, a_addr, b_addr);
         commTrace.updateSpat(a, b-1, dsize);
-    }
+    //}
 }
 
 VOID add_sp_cons(THREADID a, THREADID b, UINT32 count, UINT32 dsize) {
@@ -300,14 +304,24 @@ VOID add_sp_comm(THREADID a, THREADID b, UINT32 dsize) {
 }
 
 static inline
+VOID add_mem_write(THREADID tid, UINT32 dsize) {
+    n_mem_acc_w[tid] += 1;
+    sz_mem_acc_w[tid] += dsize;
+}
+
+static inline
+VOID add_mem_read(THREADID tid, UINT32 dsize) {
+    n_mem_acc_r[tid] += 1;
+    sz_mem_acc_r[tid] += dsize;
+}
+
+static inline
 VOID add_mem_rw(THREADID tid, UINT32 dsize, bool isWrite) {
     // Increment n_mem_access
     if (isWrite == false) {
-        n_mem_acc_r[tid] += 1;
-        sz_mem_acc_r[tid] += dsize;
+        add_mem_read(tid, dsize); 
     } else {
-        n_mem_acc_w[tid] += 1;
-        sz_mem_acc_w[tid] += dsize;
+        add_mem_write(tid, dsize);
     }
 }
 
@@ -935,8 +949,8 @@ VOID do_comm_ps(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
     */
     
     //Update communications
-    //CommLineProdCons clps =  commLPS.getLine(line);
-    CommLineProdCons clps =  commLPS.getLine(line, num_threads);
+    CommLineProdCons clps =  commLPS.getLine(line);
+    //CommLineProdCons clps =  commLPS.getLine(line, num_threads);
     THREADID a = clps.getFirst();
     
     // Not work now because it may be a read op
@@ -955,14 +969,14 @@ VOID do_comm_ps(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
         
             //CommLineProdCons clext =  commLPS.getLine(line+ext);
             //std::set<ThreadPayload> pendings = commLPS.getLine(exLine).getEarls();
-            std::set<ThreadPayload> pendings = commLPS.getLineEarls(exLine);
-            for (std::set<ThreadPayload>::iterator it = pendings.begin(); it != pendings.end(); ++it) {
+        //    std::set<ThreadPayload> pendings = commLPS.getLineEarls(exLine);
+        //    for (std::set<ThreadPayload>::iterator it = pendings.begin(); it != pendings.end(); ++it) {
                 //add_sp_ps(tid, (*it).m_Tid, 1, addr, 0);
-                add_sp_cons(tid, (*it).m_Tid, (*it).m_Count, (*it).m_Size);
+        //        add_sp_cons(tid, (*it).m_Tid, (*it).m_Count, (*it).m_Size);
                 //commLPS.removeLineEarl(exLine, (*it).m_Tid);
-                commLPS.removeLineEarlPayload(exLine, (*it));
+        //        commLPS.removeLineEarlPayload(exLine, (*it));
                 //commLPS.resetLoadLineEarl(exLine, (*it));
-            }
+        //    }
             //if (pendings.size() > 0)
             //    commLPS.clearLineEarls(exLine);   // SLOW!
            //add_sp_ps(tid, clext.getEarl(i), 1, addr, 0);
@@ -986,7 +1000,7 @@ VOID do_comm_ps(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
             add_sp_ps(tid, a, dsize);
         }
         else {
-            commLPS.addLineEarl(line, tid+1, 1, dsize);
+         //   commLPS.addLineEarl(line, tid+1, 1, dsize);
             //printf("[L-%ld] w_op: %d, tid: %d, n_earls: %d\n", line, w_op, tid, commLPS.numLineEarls(line));
         }
         //cout << " [pair] w_op: " << w_op << ", tid: " << tid << ", a: " << a << endl;  
@@ -1026,6 +1040,55 @@ VOID do_comm_ps_simple2(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op)
 }
 
 VOID do_comm_ps_simple(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
+    if (num_threads < 2 || trace_paused == true)
+        return;
+    
+    UINT64 line = addr >> COMMSIZE;
+    THREADID tid = real_tid(pin_tid);
+
+    if (w_op == true) {
+        // Only write op will update the detection line
+        UINT32 n_line = 1 + (dsize >> COMMSIZE);
+        //printf("[L-%ld] w_op: %d, tid: %d, dsize: %d, n_line: %d\n", line, w_op, tid, dsize, n_line);
+        commLPS.updateCreateLineBatch(line, addr, n_line, tid+1);
+        //commLPS.updateLine(line, tid+1, addr);
+        //printf("[L-%ld] w_op: %d, tid: %d, a: %d\n", line, w_op, tid, a);
+        //Update mem accesses
+        add_mem_write(tid, dsize);
+    }
+    else {
+        CommLineProdCons clps = commLPS.getLineLazy(line);
+        if (clps.isEmpty() == false) {
+            /*
+            if (clps.getSecond_addr() != 0 && clps.getSecond_addr() <= addr) {
+                //printf("[L-%ld] w_op: %d, tid: %d, b: %d, b_addr: %ld\n", line, w_op, tid, clps.getSecond(), clps.getSecond_addr());
+                add_sp_ps(tid, clps.getSecond(), dsize);
+            }
+            else if (clps.getFirst_addr() <= addr) {
+                //printf("[L-%ld] w_op: %d, tid: %d, a: %d, a_addr: %ld\n", line, w_op, tid, clps.getFirst(), clps.getFirst_addr());
+                add_sp_ps(tid, clps.getFirst(), dsize);
+            }
+            */
+                
+            //if (clps.getFirst() != 0) {
+                // Still need to check because of the optimistic locking in getLine()
+            //    add_sp_ps(tid, clps.getFirst(), dsize);
+                //printf("  [L-%ld] w_op: %d, tid: %d, getFirst(): %d\n", line, w_op, tid, clps.getFirst());
+            //}
+            // First is the most recent access
+            if (clps.getFirst_addr() <= addr && tid != clps.getFirst()-1) {
+                add_sp_ps(tid, clps.getFirst(), dsize);
+            }
+            else if (clps.getSecond() != 0 && tid != clps.getSecond()-1) {
+                add_sp_ps(tid, clps.getSecond(), dsize);
+            }
+        }
+        //Update mem accesses
+        add_mem_read(tid, dsize);
+    }
+}
+
+VOID do_comm_prod_tb(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
     if (num_threads < 2)
         return;
     
@@ -1035,34 +1098,24 @@ VOID do_comm_ps_simple(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) 
      //Update mem accesses
     add_mem_rw(tid, dsize, w_op);
     
-    //CommLineProdCons clps;
-    //THREADID a;
-
     if (w_op == true) {
         // Only write op will update the detection line
         UINT32 n_line = 1 + (dsize >> COMMSIZE);
         //printf("[L-%ld] w_op: %d, tid: %d, dsize: %d, n_line: %d\n", line, w_op, tid, dsize, n_line);
-        commLPS.updateCreateLineBatch(line, addr, n_line, tid+1);
+        commLPTB.updateCreateTBLineBatch(line, addr, n_line, tid+1);
         //printf("[L-%ld] w_op: %d, tid: %d, a: %d\n", line, w_op, tid, a);
     }
     else {
-        CommLineProdCons clps = commLPS.getLineLazy(line);
-        if (clps.isEmpty() == false) {
-            if (clps.getSecond_addr() != 0 && clps.getSecond_addr() <= addr) {
-                //printf("[L-%ld] w_op: %d, tid: %d, b: %d, b_addr: %ld\n", line, w_op, tid, clps.getSecond(), clps.getSecond_addr());
-                add_sp_ps(tid, clps.getSecond(), dsize);
+        CommLineProdTB clptb = commLPTB.getTBLineLazy(tid+1, line, num_threads);
+        if (clptb.isEmpty() == false) {
+            if (clptb.getSecond_addr() != 0 && clptb.getSecond_addr() <= addr) {
+                //printf("[L-%ld] w_op: %d, tid: %d, b: %d, b_addr: %ld\n", line, w_op, tid, clptb.getSecond(), clptb.getSecond_addr());
+                add_sp_ps(tid, clptb.getSecond(), dsize);
             }
-            else if (clps.getFirst_addr() <= addr) {
-                //printf("[L-%ld] w_op: %d, tid: %d, a: %d, a_addr: %ld\n", line, w_op, tid, clps.getFirst(), clps.getFirst_addr());
-                add_sp_ps(tid, clps.getFirst(), dsize);
+            else if (clptb.getFirst_addr() <= addr) {
+                //printf("[L-%ld] w_op: %d, tid: %d, a: %d, a_addr: %ld\n", line, w_op, tid, clptb.getFirst(), clptb.getFirst_addr());
+                add_sp_ps(tid, clptb.getFirst(), dsize);
             }
-                
-            //if (clps.getFirst() != 0) {
-                // Still need to check because of the optimistic locking in getLine()
-            //    add_sp_ps(tid, clps.getFirst(), dsize);
-                //printf("  [L-%ld] w_op: %d, tid: %d, getFirst(): %d\n", line, w_op, tid, clps.getFirst());
-            //}
-
         }
     }
 }
@@ -1330,6 +1383,18 @@ VOID trace_comm_ps_simple(INS ins, VOID *v) {
 
 }
 
+VOID trace_comm_prod_tb(INS ins, VOID *v) {
+    if (INS_IsMemoryWrite(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_comm_prod_tb, IARG_MEMORYWRITE_EA, IARG_THREAD_ID, IARG_MEMORYWRITE_SIZE, IARG_BOOL, true, IARG_END);
+
+    if (INS_IsMemoryRead(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_comm_prod_tb, IARG_MEMORYREAD_EA, IARG_THREAD_ID, IARG_MEMORYREAD_SIZE, IARG_BOOL, false, IARG_END);
+
+    if (INS_HasMemoryRead2(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_comm_prod_tb, IARG_MEMORYREAD2_EA, IARG_THREAD_ID, IARG_MEMORYREAD_SIZE, IARG_BOOL, false, IARG_END);
+
+}
+
 VOID trace_memory_page(INS ins, VOID *v) {
     if (INS_IsMemoryRead(ins))
         INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_numa, IARG_CONST_CONTEXT, IARG_MEMORYREAD_EA, IARG_THREAD_ID, IARG_END);
@@ -1437,10 +1502,12 @@ VOID print_mem_acc() {
 
 VOID print_mem_acc_rw() {
     ofstream f;
-    char fname[255];
+    //char fname[255];
 
-    sprintf(fname, "%s.mem_access.csv", img_name.c_str());
+    //sprintf(fname, "%s.%s.%s.mem_access.csv", img_name.c_str(),
+    //        decstr(num_threads), decstr(COMMSIZE));
     
+    string fname = img_name + "." + decstr(num_threads) + "." + decstr(COMMSIZE) + ".mem_access.csv";
 
     int real_tid[MAXTHREADS + 1];
     int i = 0, a;
@@ -1451,7 +1518,7 @@ VOID print_mem_acc_rw() {
 
     cout << fname << endl;
 
-    f.open(fname);
+    f.open(fname.c_str());
 
     for (int i = num_threads - 1; i >= 0; i--) {
         a = real_tid[i];
@@ -1708,7 +1775,7 @@ VOID mythread(VOID * arg) {
     if (TRACEDELAY > 0) {
         PIN_Sleep(TRACEDELAY);
         trace_paused = false;
-        printf("[DeTLoc] Set trace_paused=%d\n", trace_paused);
+        printf("[DeTLoc] Tracing is resumed (trace_paused=%d)\n", trace_paused);
     }
     while (1) {
         PIN_Sleep(INTERVAL ? INTERVAL : 100);
@@ -1756,7 +1823,7 @@ VOID mythread(VOID * arg) {
             commTrace.print_spat(pidmap, img_name, num_threads, COMMSIZE);
         }
 
-        if (DOCOMMPS || DOCOMMPSIMP) {
+        if (DOCOMMPS || DOCOMMPSIMP || DOCOMMPRODTB) {
             commTrace.print_spat_interval(pidmap, img_name, num_threads, COMMSIZE);
             commTrace.resetSpat();
         }
@@ -1838,14 +1905,50 @@ VOID mythread(VOID * arg) {
 //     return ret;
 // }
 
+VOID DOCOMM_POSTMALLOC(ADDRINT addr, THREADID tid) {
+    //tid = real_tid(tid);
+    if (tmp_allocs[tid].addr == 12341234) {
+        tmp_allocs[tid].addr = addr >> MYPAGESIZE;
+        UINT64 line = addr >> COMMSIZE;
+        UINT32 n_line = 1 + (tmp_allocs[tid].size >> COMMSIZE);
+    
+        commLPS.updateCreateLineBatch(line, addr, n_line, real_tid(tid)+1);
+        cout << "::: ALLOC: tid=" << tid << ", line=" << line << ", size=" << tmp_allocs[tid].size << endl;
+    }
+}
+
+VOID DOCOMM_PREMALLOC(ADDRINT retip, THREADID tid, const CONTEXT *ctxt, ADDRINT size) {
+    //tid = real_tid(tid);
+
+    //if (size < 1024)
+    //    return;
+
+    if (tmp_allocs[tid].addr == 0 || tmp_allocs[tid].addr != 12341234) {
+        tmp_allocs[tid].addr = 12341234;
+        tmp_allocs[tid].tid = real_tid(tid);
+        tmp_allocs[tid].size = size;
+        //tmp_allocs[tid].loc = loc;
+        tmp_allocs[tid].name = "";
+    } else {
+        tmp_allocs[tid].tid = real_tid(tid);
+        tmp_allocs[tid].size = size;
+        tmp_allocs[tid].name = "";
+        //cerr << "BUGBUGBUGBUG PREMALLOC " << tid << endl;
+    }
+}
+
 VOID PREMALLOC(ADDRINT retip, THREADID tid, const CONTEXT *ctxt, ADDRINT size) {
     tid = real_tid(tid);
 
-    if (size < 1024 * 1024)
+    // Minimum size we want to track
+    //if (size < 1024 * 1024)
+    if (size < 1024)
         return;
 
     string loc = find_location(ctxt);
 
+    //cout << " PREALLOC: tmp_allocs[" << tid << "].addr=" << tmp_allocs[tid].addr << endl;
+    //if (tmp_allocs[tid].addr == 0) {
     if (tmp_allocs[tid].addr == 0) {
         tmp_allocs[tid].addr = 12341234;
         tmp_allocs[tid].tid = real_tid(tid);
@@ -1897,6 +2000,20 @@ VOID InitMain(IMG img, VOID *v) {
             RTN_Close(mallocRtn);
         }
     }
+
+    /* Notes: not all memory allocation is using malloc, for example static allocation
+    // So, tracing from write and read op is the safest way currently
+    if (DOCOMMPSIMP) {
+        RTN mallocRtn = RTN_FindByName(img, "malloc");
+        if (RTN_Valid(mallocRtn)) {
+            RTN_Open(mallocRtn);
+            
+            RTN_InsertCall(mallocRtn, IPOINT_BEFORE, (AFUNPTR) DOCOMM_PREMALLOC, IARG_RETURN_IP, IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_FUNCARG_ENTRYPOINT_VALUE, 0, IARG_END);
+            RTN_InsertCall(mallocRtn, IPOINT_BEFORE, (AFUNPTR) DOCOMM_POSTMALLOC, IARG_RETURN_IP, IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_FUNCARG_ENTRYPOINT_VALUE, 0, IARG_END);
+
+            RTN_Close(mallocRtn);
+        }
+    }*/
 }
 
 VOID Fini(INT32 code, VOID *v) {
@@ -1919,8 +2036,10 @@ VOID Fini(INT32 code, VOID *v) {
     if (DOCOMMSS)
         print_sp();
 
-    if (DOCOMMPS || DOCOMMPSIMP)
+    if (DOCOMMPS || DOCOMMPSIMP || DOCOMMPRODTB) {
         print_sp();
+        print_mem_acc_rw();
+    }
     
     if (DOCOMMSSRW) {
         print_sp();
@@ -1962,7 +2081,7 @@ int main(int argc, char *argv[]) {
 
     MYPAGESIZE = log2(sysconf(_SC_PAGESIZE));
 
-    if (!DOCOMM && !DOPAGE && !DOPCOMM && !DOCOMMLOAD && !DOSTCOMM && !DOCOMMTIME && !DOCOMMSEQ && !DOSCOMM && !DOMEM && !DOCOMMSTS && !DOCOMMSS && !DOCOMMSSRW && !DOCOMMPS && !DOCOMMPSIMP) {
+    if (!DOCOMM && !DOPAGE && !DOPCOMM && !DOCOMMLOAD && !DOSTCOMM && !DOCOMMTIME && !DOCOMMSEQ && !DOSCOMM && !DOMEM && !DOCOMMSTS && !DOCOMMSS && !DOCOMMSSRW && !DOCOMMPS && !DOCOMMPSIMP &&!DOCOMMPRODTB) {
         cerr << "ERROR: need to choose at least one of communication (-c), (-cc), (-cl) or page usage (-p) detection" << endl;
         cerr << endl << KNOB_BASE::StringKnobSummary() << endl;
         return 1;
@@ -1988,7 +2107,7 @@ int main(int argc, char *argv[]) {
     if (TRACEDELAY > 0) {
         trace_paused = true;
         //printf("[DeTLoc] Tracing will be delayed for %d ms\n", TRACEDELAY);
-        cout << "[DeTLoc] Tracing will be delayed for " << TRACEDELAY << " ms" << endl;
+        cout << "[DeTLoc] Tracing is paused for " << TRACEDELAY << " ms" << endl;
     }
 
 
@@ -2088,6 +2207,10 @@ int main(int argc, char *argv[]) {
 
     if (DOCOMMPSIMP) {
         INS_AddInstrumentFunction(trace_comm_ps_simple, 0);
+    }
+    
+    if (DOCOMMPRODTB) {
+        INS_AddInstrumentFunction(trace_comm_prod_tb, 0);
     }
 
     IMG_AddInstrumentFunction(InitMain, 0);

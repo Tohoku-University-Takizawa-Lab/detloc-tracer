@@ -72,14 +72,14 @@ public:
 };
 
 class CommLineProdCons {
-private:
+//private:
     //mutable std::set<THREADID> earls;
-    mutable PIN_MUTEX earlsLock;
-    mutable std::set<ThreadPayload> earls;
+//    mutable PIN_MUTEX earlsLock;
+//    mutable std::set<ThreadPayload> earls;
 
 public:
-    UINT64 m_Addr;
-    size_t m_Ref; //Start from 1, 0 means dummy
+    UINT64 m_Line;
+    //size_t m_Ref; //Start from 1, 0 means dummy
     mutable THREADID m_First;
     mutable THREADID m_Second;
     
@@ -89,37 +89,37 @@ public:
     //mutable std::vector<UINT32> earls;
     //mutable UINT32* earls;
     
-    CommLineProdCons(UINT64 addr) : 
-    m_Addr(addr), m_Ref(0), m_First(0), m_Second(0),
+    CommLineProdCons(UINT64 line) : 
+    m_Line(line), m_First(0), m_Second(0),
     m_First_addr(0), m_Second_addr(0) {
-        PIN_MutexInit(&earlsLock);
+  //      PIN_MutexInit(&earlsLock);
     }
 
-    CommLineProdCons(UINT64 addr, size_t ref) :
-    m_Addr(addr), m_Ref(ref), m_First(0), m_Second(0),
+    CommLineProdCons() :
+    m_Line(0), m_First(0), m_Second(0),
     m_First_addr(0), m_Second_addr(0) {
-        PIN_MutexInit(&earlsLock);
+  //      PIN_MutexInit(&earlsLock);
     }
     
-    CommLineProdCons(UINT64 addr, int num_threads) : earls(),
-    m_Addr(addr), m_Ref(0), m_First(0), m_Second(0),
-    m_First_addr(0), m_Second_addr(0) {
-        PIN_MutexInit(&earlsLock);
+    //CommLineProdCons(UINT64 addr, int num_threads) :
+    //m_Addr(addr), m_First(0), m_Second(0),
+    //m_First_addr(0), m_Second_addr(0) {
+  //      PIN_MutexInit(&earlsLock);
         //earls = new UINT32[n_earls];
         //earls = new std::vector<UINT32>(n_earls);
-    }
+    //}
     
     ~CommLineProdCons() {
-        PIN_MutexFini(&earlsLock);
+  //      PIN_MutexFini(&earlsLock);
         //printf("** [L-%ld] CommLine dtor: n_earls=%ld\n", m_Addr, earls.size());
     }
 
     bool operator<(const CommLineProdCons &clObj) const {
-        return (this->m_Addr < clObj.m_Addr);
+        return (this->m_Line < clObj.m_Line);
     }
 
     bool operator==(const CommLineProdCons &clObj) const {
-        return (m_Addr == clObj.m_Addr);
+        return (m_Line == clObj.m_Line);
     }
 
     // Update line assumes only for write op
@@ -161,13 +161,18 @@ public:
     }
 
     void setEmpty() {
-        m_Addr = 0;
+        setLine(0);
     }
 
     bool isEmpty() {
-        return (m_Addr == 0 ? true : false);
+        return (m_Line == 0 ? true : false);
     }
 
+    void setLine(UINT64 line) {
+        m_Line = line;
+    } 
+
+/*
     void addEarl(THREADID tid, UINT32 n, UINT32 sz) {
         ThreadPayload cand = ThreadPayload(tid);
         auto it = earls.find(cand);
@@ -205,9 +210,9 @@ public:
         }
         else {
             cand.update(n, sz);
-            PIN_MutexLock(&earlsLock);
+    //        PIN_MutexLock(&earlsLock);
             earls.insert(cand);
-            PIN_MutexUnlock(&earlsLock);
+    //        PIN_MutexUnlock(&earlsLock);
             //const_cast<ThreadPayload&> (*result.first).update(n, sz);
         }
         //PIN_MutexUnlock(&earlsLock);
@@ -215,10 +220,10 @@ public:
 
     void deleteEarl(THREADID tid) {
         ThreadPayload cand = ThreadPayload(tid);
-        PIN_MutexLock(&earlsLock);
+   //     PIN_MutexLock(&earlsLock);
         //earls.erase(tid);
         earls.erase(cand);
-        PIN_MutexUnlock(&earlsLock);
+   //     PIN_MutexUnlock(&earlsLock);
     }
     
     void deleteEarlPayload(ThreadPayload pl) {
@@ -250,6 +255,7 @@ public:
             const_cast<ThreadPayload&> (*it).resetLoad();
         }
     }
+*/
 };
 
 class CommLineProdConsSet {
@@ -324,6 +330,7 @@ public:
         }
     }
     
+    /*
     CommLineProdCons getLine(UINT64 line, int num_threads) {
         CommLineProdCons cand_cl = CommLineProdCons(line, num_threads);
         //CommLineProdCons cand_cl = CommLineProdCons(line);
@@ -347,6 +354,7 @@ public:
             return (*result.first);
         }
     }
+    */
 
     CommLineProdCons getLineLazy(UINT64 line) {
         CommLineProdCons cand_cl = CommLineProdCons(line);
@@ -374,6 +382,7 @@ public:
         }
     }
     
+    /*
     void updateCreateLineBatch(UINT64 start, UINT64 addr, UINT32 len, THREADID tid) {
         // Tid must be > 0, e.g, tid should be in tid+1 outside the function
         //if (len > 1)
@@ -397,13 +406,39 @@ public:
             }
         } 
     }
+    */
+    
+    void updateCreateLineBatch(UINT64 start, UINT64 addr, UINT32 len, THREADID tid) {
+        // Tid must be > 0, e.g, tid should be in tid+1 outside the function
+        CommLineProdCons cand = CommLineProdCons();
+        cand.update(tid, addr);
+        for (UINT64 line = start; line < start+len; ++line) {
+            cand.setLine(line);
+            auto it = setCommLPS.find(cand);
+            if (it == setCommLPS.end()) {
+                // Not found, new insert
+                PIN_MutexLock(&setLock);
+                setCommLPS.insert(cand);
+                PIN_MutexUnlock(&setLock);
+            }
+            else if (tid != (*it).m_First) {
+                // Update only if current tid is different
+                const_cast<CommLineProdCons&> (*it).update(tid, addr);
+            }
+        } 
+    }
 
     void updateLine(UINT64 line, THREADID tid, UINT64 addr) {
         CommLineProdCons cand_cl = CommLineProdCons(line);
         auto it = setCommLPS.find(cand_cl);
-        const_cast<CommLineProdCons&> (*it).update(tid, addr);
+        if (it != setCommLPS.end()) {
+            const_cast<CommLineProdCons&> (*it).update(tid, addr);
+        }
+        //else {
+        //    printf(":: Cannot find line: %ld\n", line);
+        //}
     }
-    
+/*    
     void addLineEarl(UINT64 line, THREADID tid, UINT32 n, UINT32 sz) {
         CommLineProdCons cand_cl = CommLineProdCons(line);
         auto it = setCommLPS.find(cand_cl);
@@ -446,6 +481,7 @@ public:
         auto it = setCommLPS.find(cand_cl);
         return const_cast<CommLineProdCons&> (*it).getEarls();
     }
+*/
 };
 
 #endif /* COMMLPS_H */
