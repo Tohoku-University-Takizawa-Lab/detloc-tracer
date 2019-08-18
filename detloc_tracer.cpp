@@ -2035,6 +2035,10 @@ VOID InitMain(IMG img, VOID *v) {
         RTN roiBeginRtn = RTN_FindByName(img, "detloc_roi_begin");
         if (!RTN_Valid(roiBeginRtn))
             roiBeginRtn = RTN_FindByName(img, "detloc_roi_begin_");
+        // Uses roi from PARSEC hooks
+        if (!RTN_Valid(roiBeginRtn))
+            roiBeginRtn = RTN_FindByName(img, "__parsec_roi_begin");
+        
 
         if (RTN_Valid(roiBeginRtn)) {
             RTN_Open(roiBeginRtn);
@@ -2047,6 +2051,10 @@ VOID InitMain(IMG img, VOID *v) {
         RTN roiEndRtn = RTN_FindByName(img, "detloc_roi_end");
         if (!RTN_Valid(roiEndRtn))
             roiEndRtn = RTN_FindByName(img, "detloc_roi_end_");
+        
+        if (!RTN_Valid(roiEndRtn))
+            roiEndRtn = RTN_FindByName(img, "__parsec_roi_end");
+
 
         if (RTN_Valid(roiEndRtn)) {
             RTN_Open(roiEndRtn);
