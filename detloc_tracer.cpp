@@ -74,6 +74,7 @@ KNOB<bool> DOCOMMPS (KNOB_MODE_WRITEONCE, "pintool", "s_prod", "0", "enable com 
 KNOB<bool> DOCOMMPSIMP (KNOB_MODE_WRITEONCE, "pintool", "s_prod_simple", "0", "enable com detection, spatio using prod/cons");
 KNOB<bool> DOCOMMPRODTB (KNOB_MODE_WRITEONCE, "pintool", "s_prod_tb", "0", "enable com detection, spatio using prod/cons (thread_based)");
 KNOB<int> TRACEDELAY(KNOB_MODE_WRITEONCE, "pintool", "delay", "0", "Tracing delay (in ms)");
+KNOB<bool> DOROI(KNOB_MODE_WRITEONCE, "pintool", "roi", "0", "Enable ROI detection");
 
 //static uint32_t cpu_khz = 2400000;
 //static float CYCLE_RESOLUTION = 2.4 * SEC_GHZ;
@@ -1972,6 +1973,20 @@ VOID POSTMALLOC(ADDRINT ret, THREADID tid) {
     }
 }
 
+VOID DO_ROI_BEGIN(ADDRINT ret, THREADID tid, const CONTEXT *ctxt) {
+    //cout << ":: ROI_BEGIN detected" << endl;
+    trace_paused = false;
+    //printf("[DeTLoc] ROI_Begin (trace_paused=%d)\n", trace_paused);
+    cout << ":: trace_paused = " << trace_paused << endl;
+}
+
+VOID DO_ROI_END(ADDRINT ret, THREADID tid, const CONTEXT *ctxt) {
+    trace_paused = true;
+    //printf("[DeTLoc] ROI_End (trace_paused=%d)\n", trace_paused);
+    //printf("[DeTLoc] ROI_End (trace_paused=%d)\n", trace_paused);
+    cout << ":: trace_paused = " << trace_paused << endl;
+}
+
 void getStructs(const char *name);
 
 VOID InitMain(IMG img, VOID *v) {
@@ -2014,6 +2029,32 @@ VOID InitMain(IMG img, VOID *v) {
             RTN_Close(mallocRtn);
         }
     }*/
+    
+    if (DOCOMMPSIMP && DOROI) {
+        //printf("** Finding ROI rtn..\n");
+        RTN roiBeginRtn = RTN_FindByName(img, "detloc_roi_begin");
+        if (!RTN_Valid(roiBeginRtn))
+            roiBeginRtn = RTN_FindByName(img, "detloc_roi_begin_");
+
+        if (RTN_Valid(roiBeginRtn)) {
+            RTN_Open(roiBeginRtn);
+            //printf("** Found ROI rtn\n");
+            RTN_InsertCall(roiBeginRtn, IPOINT_BEFORE, (AFUNPTR) DO_ROI_BEGIN, IARG_RETURN_IP, IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_END);
+            //RTN_InsertCall(roiBeginRtn, IPOINT_AFTER, (AFUNPTR) DO_ROI_BEGIN, IARG_FUNCRET_EXITPOINT_VALUE, IARG_THREAD_ID,IARG_END);
+            RTN_Close(roiBeginRtn);
+        }
+        
+        RTN roiEndRtn = RTN_FindByName(img, "detloc_roi_end");
+        if (!RTN_Valid(roiEndRtn))
+            roiEndRtn = RTN_FindByName(img, "detloc_roi_end_");
+
+        if (RTN_Valid(roiEndRtn)) {
+            RTN_Open(roiEndRtn);
+            RTN_InsertCall(roiEndRtn, IPOINT_BEFORE, (AFUNPTR) DO_ROI_END, IARG_RETURN_IP, IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_END);
+            //RTN_InsertCall(roiEndRtn, IPOINT_AFTER, (AFUNPTR) DO_ROI_END, IARG_FUNCRET_EXITPOINT_VALUE, IARG_THREAD_ID,IARG_END);
+            RTN_Close(roiEndRtn);
+        }
+    }
 }
 
 VOID Fini(INT32 code, VOID *v) {
@@ -2104,10 +2145,13 @@ int main(int argc, char *argv[]) {
         cout << "COMMUNICATION TIME INTERVAL: " << TIMERES << " ns" << endl;
     }
 
-    if (TRACEDELAY > 0) {
+    if (DOROI || TRACEDELAY > 0) {
         trace_paused = true;
         //printf("[DeTLoc] Tracing will be delayed for %d ms\n", TRACEDELAY);
-        cout << "[DeTLoc] Tracing is paused for " << TRACEDELAY << " ms" << endl;
+        if (TRACEDELAY > 0)
+            cout << "[DeTLoc] Tracing is paused for " << TRACEDELAY << " ms" << endl;
+        if (DOROI)
+            cout << "ROI detection is enabled" << endl;
     }
 
 
