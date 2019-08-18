@@ -1,0 +1,297 @@
+/* 
+ * File:   comm_line_ps.h
+ * Communication detection using producer-consumer pattern
+ * Author: agung
+ *
+ * Created on July 2, 2019, 9:53 PM
+ */
+
+#ifndef COMMLPS_H
+#define COMMLPS_H
+
+#include <set>
+#include <vector>
+#include <unordered_set>
+#include <sys/types.h>
+
+struct ThreadPayload {
+    THREADID tid;
+    UINT32 count;
+    UINT64 dsize;  
+};
+
+class CommLineProdCons {
+private:
+    //mutable std::set<THREADID> earls;
+    mutable PIN_MUTEX vecLock;
+    mutable std::set<THREADID> earls;
+
+public:
+    UINT64 m_Addr;
+    size_t m_Ref; //Start from 1, 0 means dummy
+    mutable THREADID m_First;
+    mutable THREADID m_Second;
+    
+    mutable UINT64 m_First_addr;
+    mutable UINT64 m_Second_addr;
+    //mutable int n_earls;
+    //mutable std::vector<UINT32> earls;
+    //mutable UINT32* earls;
+    
+    CommLineProdCons(UINT64 addr) : 
+    m_Addr(addr), m_Ref(0), m_First(0), m_Second(0),
+    m_First_addr(0), m_Second_addr(0) {
+        PIN_MutexInit(&vecLock);
+    }
+
+    CommLineProdCons(UINT64 addr, size_t ref) :
+    m_Addr(addr), m_Ref(ref), m_First(0), m_Second(0),
+    m_First_addr(0), m_Second_addr(0) {
+        PIN_MutexInit(&vecLock);
+    }
+    
+    CommLineProdCons(UINT64 addr, int num_threads) : earls(),
+    m_Addr(addr), m_Ref(0), m_First(0), m_Second(0),
+    m_First_addr(0), m_Second_addr(0) {
+        PIN_MutexInit(&vecLock);
+        //earls = new UINT32[n_earls];
+        //earls = new std::vector<UINT32>(n_earls);
+    }
+    
+    ~CommLineProdCons() {
+        PIN_MutexFini(&vecLock);
+        //delete [] earls;
+    }
+
+    bool operator<(const CommLineProdCons &clObj) const {
+        return (this->m_Addr < clObj.m_Addr);
+    }
+
+    bool operator==(const CommLineProdCons &clObj) const {
+        return (m_Addr == clObj.m_Addr);
+    }
+
+    // Update line assumes only for write op
+    void update(THREADID tid, UINT64 addr) {
+        // Consecutive writes reset the producer
+        /*
+        if (addr == m_First_addr) {
+           m_Second = 0;
+           m_Second_addr = 0; 
+        }
+        */
+        //else {
+           m_Second = m_First;
+           m_Second_addr = m_First_addr;
+        //}
+        m_First = tid;
+        m_First_addr = addr;
+    }
+
+    THREADID getFirst() {
+        return m_First;
+    }
+
+    THREADID getSecond() {
+        return m_Second;
+    }
+    
+    UINT64 getFirst_addr() {
+        return m_First_addr;
+    }
+
+    UINT64 getSecond_addr() {
+        return m_Second_addr;
+    }
+
+    void invalidate() {
+        m_Addr = 0;
+    }
+
+    bool isValid() {
+        return (m_Addr > 0 ? true : false);
+    }
+
+    void addEarl(THREADID tid) {
+       //earls.push_back(tid);
+       if (getEarl(tid) == 0) {
+            PIN_MutexLock(&vecLock);
+            earls.insert(tid);
+            PIN_MutexUnlock(&vecLock);
+       }
+       //++earls[tid];
+    }
+
+    int numEarls() {
+        return earls.size();
+        //return n_earls;
+    }
+
+    THREADID getEarl(int idx) {
+        //return earls[idx];
+        auto it = earls.find(idx);
+        if (it != earls.end())
+            return (*it);
+        else
+            return 0;
+    }
+
+    void removeEarl(int idx) {
+        earls.erase(idx);
+    }
+
+    // CAUTION: clearing set is really slow
+    void clearEarls() {
+       //PIN_MutexLock(&vecLock);
+       earls.clear();
+       //PIN_MutexUnlock(&vecLock);
+    }
+
+    std::set<THREADID> getEarls() {
+        return earls;
+    }
+};
+
+class CommLineProdConsSet {
+private:
+    //PIN_RWMUTEX setLock;
+    PIN_MUTEX setLock;
+    //PIN_RWMUTEX vecLock;
+    std::set<CommLineProdCons> setCommLPS;
+    //std::unordered_set<CommL> setCommL;
+    //std::vector<CommLWin *> lineWindows;
+
+public:
+
+    CommLineProdConsSet()
+    : setCommLPS() {
+    //, lineWindows() {
+        PIN_MutexInit(&setLock);
+        //PIN_RWMutexInit(&setLock);
+        //PIN_RWMutexInit(&vecLock);
+        
+        /*
+        lineWindows.reserve(1000);
+        CommLWin * new_win = new CommLWin();
+        lineWindows.push_back(new_win);
+        */
+    }
+
+    ~CommLineProdConsSet() {
+        PIN_MutexFini(&setLock);
+        //PIN_RWMutexFini(&setLock);
+        //PIN_RWMutexFini(&vecLock);
+    }
+
+    bool exists(UINT64 line) {
+        bool found = false;
+        CommLineProdCons cand_cl = CommLineProdCons(line);
+        //CommL *cand_cl = new CommL(line);
+        //setLock.acquire_read();
+        //PIN_RWMutexReadLock(&setLock);
+        PIN_MutexLock(&setLock);
+        //std::set<CommL>::iterator it = setCommL.find(cand_cl);
+        auto it = setCommLPS.find(cand_cl);
+        if (it != setCommLPS.end())
+            found = true;
+        //else
+        //    found = false;
+        //setLock.release();
+        //PIN_RWMutexUnlock(&setLock);
+        PIN_MutexUnlock(&setLock);
+        return found;
+    }
+
+    CommLineProdCons getLine(UINT64 line) {
+        CommLineProdCons cand_cl = CommLineProdCons(line);
+        //CommL *cand_cl = new CommL(line);
+        //setLock.acquire_read();
+        auto it = setCommLPS.find(cand_cl);
+        //setLock.release();
+        if (it != setCommLPS.end()) {
+            return (*it);
+            //return it;
+        } else {
+            CommLineProdCons new_cl = CommLineProdCons(line);
+            //CommL *new_cl = new CommL(line);
+            //setLock.acquire();
+            //PIN_RWMutexWriteLock(&setLock);
+            PIN_MutexLock(&setLock);
+            auto result = setCommLPS.insert(new_cl);
+            PIN_MutexUnlock(&setLock);
+            //PIN_RWMutexUnlock(&setLock);
+            //setLock.release();
+            return (*result.first);
+        }
+    }
+    
+    CommLineProdCons getLine(UINT64 line, int num_threads) {
+        CommLineProdCons cand_cl = CommLineProdCons(line, num_threads);
+        //CommLineProdCons cand_cl = CommLineProdCons(line);
+        //CommL *cand_cl = new CommL(line);
+        //setLock.acquire_read();
+        auto it = setCommLPS.find(cand_cl);
+        //setLock.release();
+        if (it != setCommLPS.end()) {
+            return (*it);
+            //return it;
+        } else {
+            //CommLineProdCons new_cl = CommLineProdCons(line);
+            //CommL *new_cl = new CommL(line);
+            //setLock.acquire();
+            //PIN_RWMutexWriteLock(&setLock);
+            PIN_MutexLock(&setLock);
+            auto result = setCommLPS.insert(cand_cl);
+            PIN_MutexUnlock(&setLock);
+            //PIN_RWMutexUnlock(&setLock);
+            //setLock.release();
+            return (*result.first);
+        }
+    }
+
+
+    CommLineProdCons getLineLazy(UINT64 line) {
+        CommLineProdCons cand_cl = CommLineProdCons(line);
+        auto it = setCommLPS.find(cand_cl);
+        if (it != setCommLPS.end()) {
+            return (*it);
+            //return it;
+        } else {
+            cand_cl.invalidate();
+            return cand_cl;
+        }
+    }
+
+    void updateLine(UINT64 line, THREADID tid, UINT64 addr) {
+        CommLineProdCons cand_cl = CommLineProdCons(line);
+        auto it = setCommLPS.find(cand_cl);
+        const_cast<CommLineProdCons&> (*it).update(tid, addr);
+    }
+    
+    void addLineEarl(UINT64 line, THREADID tid) {
+        CommLineProdCons cand_cl = CommLineProdCons(line);
+        auto it = setCommLPS.find(cand_cl);
+        const_cast<CommLineProdCons&> (*it).addEarl(tid);
+    }
+    
+    void removeLineEarl(UINT64 line, THREADID tid) {
+        CommLineProdCons cand_cl = CommLineProdCons(line);
+        auto it = setCommLPS.find(cand_cl);
+        const_cast<CommLineProdCons&> (*it).removeEarl(tid);
+    }
+    
+    void clearLineEarls(UINT64 line) {
+        CommLineProdCons cand_cl = CommLineProdCons(line);
+        auto it = setCommLPS.find(cand_cl);
+        const_cast<CommLineProdCons&> (*it).clearEarls();
+    }
+    
+    int numLineEarls(UINT64 line) {
+        CommLineProdCons cand_cl = CommLineProdCons(line);
+        auto it = setCommLPS.find(cand_cl);
+        return const_cast<CommLineProdCons&> (*it).numEarls();
+    }
+};
+
+#endif /* COMMLPS_H */
+
