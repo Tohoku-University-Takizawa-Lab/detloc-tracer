@@ -75,6 +75,7 @@ KNOB<bool> DOCOMMPSIMP (KNOB_MODE_WRITEONCE, "pintool", "s_prod_simple", "0", "e
 KNOB<bool> DOCOMMPRODTB (KNOB_MODE_WRITEONCE, "pintool", "s_prod_tb", "0", "enable com detection, spatio using prod/cons (thread_based)");
 KNOB<int> TRACEDELAY(KNOB_MODE_WRITEONCE, "pintool", "delay", "0", "Tracing delay (in ms)");
 KNOB<bool> DOROI(KNOB_MODE_WRITEONCE, "pintool", "roi", "0", "Enable ROI detection");
+KNOB<unsigned int> LIMSAMPLE(KNOB_MODE_WRITEONCE, "pintool", "n_skip", "0", "Only sample for every n mem. read");
 
 //static uint32_t cpu_khz = 2400000;
 //static float CYCLE_RESOLUTION = 2.4 * SEC_GHZ;
@@ -116,7 +117,7 @@ UINT64 n_mem_acc_r[MAXTHREADS + 1];
 UINT64 n_mem_acc_w[MAXTHREADS + 1];
 UINT64 sz_mem_acc_r[MAXTHREADS + 1];
 UINT64 sz_mem_acc_w[MAXTHREADS + 1];
-
+UINT32 skip_counters[MAXTHREADS + 1];
 
 class TPayload {
 public:
@@ -1089,6 +1090,52 @@ VOID do_comm_ps_simple(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) 
     }
 }
 
+VOID do_comm_ps_simple_lim(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
+    if (num_threads < 2 || trace_paused == true)
+        return;
+    
+    if ((w_op == true && skip_counters[pin_tid] < LIMSAMPLE-1) 
+        || (w_op == false && skip_counters[pin_tid] < LIMSAMPLE)) {
+    //if (skip_counters[pin_tid] < LIMSAMPLE) {
+        ++skip_counters[pin_tid];
+        return;
+    }
+    skip_counters[pin_tid] = 0;
+
+    UINT64 line = addr >> COMMSIZE;
+    THREADID tid = real_tid(pin_tid);
+
+    if (w_op == true) {
+        // Only write op will update the detection line
+        UINT32 n_line = 1 + (dsize >> COMMSIZE);
+        commLPS.updateCreateLineBatch(line, addr, n_line, tid+1);
+        //Update mem accesses
+        add_mem_write(tid, dsize);
+    }
+    else {
+        //if (skip_counters[tid] < LIMSAMPLE) {
+        //    ++skip_counters[tid];
+        //    return;
+        //}
+        //else {
+        //skip_counters[pin_tid] = 0;
+        //}
+
+        CommLineProdCons clps = commLPS.getLineLazy(line);
+        if (clps.isEmpty() == false) {
+            // First is the most recent access
+            if (clps.getFirst_addr() <= addr && tid != clps.getFirst()-1) {
+                add_sp_ps(tid, clps.getFirst(), dsize);
+            }
+            else if (clps.getSecond() != 0 && tid != clps.getSecond()-1) {
+                add_sp_ps(tid, clps.getSecond(), dsize);
+            }
+        }
+        //Update mem accesses
+        add_mem_read(tid, dsize);
+    }
+}
+
 VOID do_comm_prod_tb(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool w_op) {
     if (num_threads < 2)
         return;
@@ -1381,6 +1428,18 @@ VOID trace_comm_ps_simple(INS ins, VOID *v) {
 
     if (INS_HasMemoryRead2(ins))
         INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_comm_ps_simple, IARG_MEMORYREAD2_EA, IARG_THREAD_ID, IARG_MEMORYREAD_SIZE, IARG_BOOL, false, IARG_END);
+
+}
+
+VOID trace_comm_ps_simple_lim(INS ins, VOID *v) {
+    if (INS_IsMemoryWrite(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_comm_ps_simple_lim, IARG_MEMORYWRITE_EA, IARG_THREAD_ID, IARG_MEMORYWRITE_SIZE, IARG_BOOL, true, IARG_END);
+
+    if (INS_IsMemoryRead(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_comm_ps_simple_lim, IARG_MEMORYREAD_EA, IARG_THREAD_ID, IARG_MEMORYREAD_SIZE, IARG_BOOL, false, IARG_END);
+
+    if (INS_HasMemoryRead2(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_comm_ps_simple_lim, IARG_MEMORYREAD2_EA, IARG_THREAD_ID, IARG_MEMORYREAD_SIZE, IARG_BOOL, false, IARG_END);
 
 }
 
@@ -2162,6 +2221,11 @@ int main(int argc, char *argv[]) {
             cout << "ROI detection is enabled" << endl;
     }
 
+    if (LIMSAMPLE > 0) {
+        //n_skip = LIMSAMPLE
+        cout << "Sample limiter is enabled, will skip for every " << LIMSAMPLE << " reads" << endl;
+    }
+
 
     THREADID t = PIN_SpawnInternalThread(mythread, NULL, 0, NULL);
     if (t != 1)
@@ -2258,8 +2322,15 @@ int main(int argc, char *argv[]) {
     }
 
     if (DOCOMMPSIMP) {
-        INS_AddInstrumentFunction(trace_comm_ps_simple, 0);
+        if (LIMSAMPLE && LIMSAMPLE > 0) {
+            memset(skip_counters, 0, sizeof(skip_counters));
+            INS_AddInstrumentFunction(trace_comm_ps_simple_lim, 0);
+        }
+        else {
+            INS_AddInstrumentFunction(trace_comm_ps_simple, 0);
+        }
     }
+
     
     if (DOCOMMPRODTB) {
         INS_AddInstrumentFunction(trace_comm_prod_tb, 0);
