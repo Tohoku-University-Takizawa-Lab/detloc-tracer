@@ -13,14 +13,14 @@ Compile:
     
     $ make
 
-(If it fails detecting the Pin, please edit the Makefile)
+(If it cannot detect the Pin, please edit the Makefile)
 
 To generate the communication matrix:
 
     $ ./run.sh -s_prod_simple -- ./your_program
 
 ## How to cite
-If you find this work useful in your research, please cite the paper using this bibtex below:
+If you find this work useful in your research, please cite the paper using this bibtex reference:
 
 ```
     @ARTICLE{8949493,  
