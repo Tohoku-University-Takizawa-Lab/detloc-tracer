@@ -13,7 +13,7 @@ Compile:
     
     $ make
 
-(If it cannot detect the Pin, please edit the Makefile)
+(If it cannot detect the Pin, please manually specify the Pin's location in the Makefile)
 
 To generate the communication matrix:
 
