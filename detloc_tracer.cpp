@@ -76,6 +76,7 @@ KNOB<bool> DOCOMMPRODTB (KNOB_MODE_WRITEONCE, "pintool", "s_prod_tb", "0", "enab
 KNOB<int> TRACEDELAY(KNOB_MODE_WRITEONCE, "pintool", "delay", "0", "Tracing delay (in ms)");
 KNOB<bool> DOROI(KNOB_MODE_WRITEONCE, "pintool", "roi", "0", "Enable ROI detection");
 KNOB<unsigned int> LIMSAMPLE(KNOB_MODE_WRITEONCE, "pintool", "n_skip", "0", "Only sample for every n mem. read");
+KNOB<bool> DOFURU(KNOB_MODE_WRITEONCE, "pintool", "furuhata", "0", "Enable furuhata detection");
 
 //static uint32_t cpu_khz = 2400000;
 //static float CYCLE_RESOLUTION = 2.4 * SEC_GHZ;
@@ -129,6 +130,15 @@ public:
 unordered_map<UINT64, TPayload> timeEventMap [MAXTHREADS + 1][MAXTHREADS + 1];
 // For accumulated printing
 //unordered_map<UINT64, TPayload> accums [MAXTHREADS + 1][MAXTHREADS + 1];
+class TFuruMemAccess {
+public:
+    UINT64 addr;
+    UINT64 size = 0;
+    UINT64 count = 0;
+    bool write;
+};
+unordered_map<UINT64, TFuruMemAccess> threadMemAccessR [MAXTHREADS + 1];
+unordered_map<UINT64, TFuruMemAccess> threadMemAccessW [MAXTHREADS + 1];
 
 struct TIDlist {
     THREADID first;
@@ -1207,12 +1217,51 @@ VOID do_comm_ss_rwx(ADDRINT addr, THREADID pin_tid, UINT32 dsize, bool t_w) {
 }
 
 VOID do_mem(ADDRINT addr, THREADID tid, UINT32 dsize) {
-    if (num_threads < 2)
+    if (num_threads < 1)
         return;
 
     // Increment n_mem_access
     n_mem_acc[tid] += 1;
     sz_mem_acc[tid] += dsize;
+}
+
+VOID do_mem_r(ADDRINT addr, THREADID tid, UINT32 dsize) {
+    if (num_threads < 1)
+        return;
+    
+    //UINT64 ts = cycles_to_nsec(get_tsc() - prog_start_time, cycle_to_ns_scale);
+    UINT64 ts = cycles_to_timeres(get_tsc(), prog_start_time, cycle_to_ns_scale, TIMERES);
+    //cout << ts << endl;
+    // Increment n_mem_access
+    n_mem_acc_r[tid] += 1;
+    sz_mem_acc_r[tid] += dsize;
+    
+    threadMemAccessR[tid][ts].addr = addr;
+    threadMemAccessR[tid][ts].size += dsize;
+    threadMemAccessR[tid][ts].count += 1;
+    threadMemAccessR[tid][ts].write = false;
+
+//timeEventMap[a][b - 1][tsc].size = timeEventMap[a][b - 1][tsc].size + msize;
+  
+    
+}
+
+VOID do_mem_w(ADDRINT addr, THREADID tid, UINT32 dsize) {
+    if (num_threads < 1)
+        return;
+
+    //UINT64 ts = cycles_to_nsec(get_tsc() - prog_start_time, cycle_to_ns_scale);
+    UINT64 ts = cycles_to_timeres(get_tsc(), prog_start_time, cycle_to_ns_scale, TIMERES);
+
+    // Increment n_mem_access
+    n_mem_acc_w[tid] += 1;
+    sz_mem_acc_w[tid] += dsize;
+    
+    threadMemAccessW[tid][ts].addr = addr;
+    threadMemAccessW[tid][ts].size += dsize;
+    threadMemAccessW[tid][ts].count += 1;
+    threadMemAccessW[tid][ts].write = true;
+
 }
 
 VOID do_sp_comm(ADDRINT addr, THREADID pin_tid, UINT32 dsize) {
@@ -1477,6 +1526,17 @@ VOID trace_mem(INS ins, VOID *v) {
         INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_mem, IARG_MEMORYWRITE_EA, IARG_THREAD_ID, IARG_MEMORYWRITE_SIZE, IARG_END);
 }
 
+VOID trace_mem_furu(INS ins, VOID *v) {
+    if (INS_IsMemoryRead(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_mem_r, IARG_MEMORYREAD_EA, IARG_THREAD_ID, IARG_MEMORYREAD_SIZE, IARG_END);
+
+    if (INS_HasMemoryRead2(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_mem_r, IARG_MEMORYREAD2_EA, IARG_THREAD_ID, IARG_MEMORYREAD_SIZE, IARG_END);
+
+    if (INS_IsMemoryWrite(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) do_mem_w, IARG_MEMORYWRITE_EA, IARG_THREAD_ID, IARG_MEMORYWRITE_SIZE, IARG_END);
+}
+
 VOID ThreadStart(THREADID tid, CONTEXT *ctxt, INT32 flags, VOID *v) {
     __sync_add_and_fetch(&num_threads, 1);
 
@@ -1637,6 +1697,39 @@ VOID print_comm_load() {
     fl << endl;
     f.close();
     fl.close();
+}
+
+VOID print_mem_access_furu() {
+    //static long n = 0;
+    ofstream f;
+    char fname[255];
+
+    sprintf(fname, "%s.mem.furu.csv", img_name.c_str());
+
+    THREADID real_tid[MAXTHREADS + 1];
+    int i = 0, a;
+
+    for (auto it : pidmap)
+        real_tid[it.second] = i++;
+
+    cout << fname << endl;
+
+    f.open(fname);
+
+    for (i = num_threads - 1; i >= 0; i--) {
+	//unordered_map<UINT64, TFuruMemAccess> rM = threadMemAccessR[i];
+	//unordered_map<UINT64, TFuruMemAccess> wM = threadMemAccessW[i];
+        a = real_tid[i];
+	for (auto const& pair: threadMemAccessR[i]) {
+	    f << a << "," << pair.first << "," << pair.second.addr << "," << pair.second.count 
+		    << "," << pair.second.size << "," << pair.second.write << endl;
+	}
+	for (auto const& pair: threadMemAccessW[i]) {
+	    f << a << "," << pair.first << "," << pair.second.addr << "," << pair.second.count 
+		    << "," << pair.second.size << "," << pair.second.write << endl;
+	}
+    }
+    f.close();
 }
 
 VOID accum_comm_events(unordered_map<std::time_t, TPayload>** accums) {
@@ -2165,6 +2258,11 @@ VOID Fini(INT32 code, VOID *v) {
         print_mem_acc();
     }
 
+    if (DOFURU) {
+        //print_mem_acc_rw();
+	print_mem_access_furu();
+    }
+
     cout << endl << "MAXTHREADS: " << MAXTHREADS << " COMMSIZE: " << COMMSIZE << " PAGESIZE: " << MYPAGESIZE << " INTERVAL: " << INTERVAL << " NUM_THREADS: " << num_threads << endl << endl;
 }
 
@@ -2189,13 +2287,13 @@ int main(int argc, char *argv[]) {
 
     MYPAGESIZE = log2(sysconf(_SC_PAGESIZE));
 
-    if (!DOCOMM && !DOPAGE && !DOPCOMM && !DOCOMMLOAD && !DOSTCOMM && !DOCOMMTIME && !DOCOMMSEQ && !DOSCOMM && !DOMEM && !DOCOMMSTS && !DOCOMMSS && !DOCOMMSSRW && !DOCOMMPS && !DOCOMMPSIMP &&!DOCOMMPRODTB) {
+    if (!DOCOMM && !DOPAGE && !DOPCOMM && !DOCOMMLOAD && !DOSTCOMM && !DOCOMMTIME && !DOCOMMSEQ && !DOSCOMM && !DOMEM && !DOCOMMSTS && !DOCOMMSS && !DOCOMMSSRW && !DOCOMMPS && !DOCOMMPSIMP &&!DOCOMMPRODTB && !DOFURU) {
         cerr << "ERROR: need to choose at least one of communication (-c), (-cc), (-cl) or page usage (-p) detection" << endl;
         cerr << endl << KNOB_BASE::StringKnobSummary() << endl;
         return 1;
     }
 
-    if (DOSTCOMM || DOPCOMM || DOCOMMTIME || DOCOMMSTS) {
+    if (DOSTCOMM || DOPCOMM || DOCOMMTIME || DOCOMMSTS || DOFURU) {
         if (!CPUKHZ) {
             cerr << "ERROR: need to specify time resolution (-tr and -khz) for the time tracing" << endl;
             return 1;
@@ -2209,7 +2307,8 @@ int main(int argc, char *argv[]) {
         //if (TIMERES > 0)
         //    CYCLE_RESOLUTION = TIMERES * SEC_GHZ;
         test_cycle_ns(CPUKHZ);
-        cout << "COMMUNICATION TIME INTERVAL: " << TIMERES << " ns" << endl;
+        //cout << "COMMUNICATION TIME INTERVAL: " << TIMERES << " ns" << endl;
+        cout << "TRACING TIME INTERVAL: " << TIMERES << " ns" << endl;
     }
 
     if (DOROI || TRACEDELAY > 0) {
@@ -2295,6 +2394,10 @@ int main(int argc, char *argv[]) {
     
     if (DOMEM) {
         INS_AddInstrumentFunction(trace_mem, 0);
+    }
+
+    if (DOFURU) {
+        INS_AddInstrumentFunction(trace_mem_furu, 0);
     }
 
     if (DOCOMMTIME) {
