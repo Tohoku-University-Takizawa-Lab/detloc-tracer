@@ -76,7 +76,7 @@ KNOB<bool> DOCOMMPRODTB (KNOB_MODE_WRITEONCE, "pintool", "s_prod_tb", "0", "enab
 KNOB<int> TRACEDELAY(KNOB_MODE_WRITEONCE, "pintool", "delay", "0", "Tracing delay (in ms)");
 KNOB<bool> DOROI(KNOB_MODE_WRITEONCE, "pintool", "roi", "0", "Enable ROI detection");
 KNOB<unsigned int> LIMSAMPLE(KNOB_MODE_WRITEONCE, "pintool", "n_skip", "0", "Only sample for every n mem. read");
-KNOB<bool> DOFURU(KNOB_MODE_WRITEONCE, "pintool", "furuhata", "0", "Enable furuhata detection");
+KNOB<bool> DOFURU(KNOB_MODE_WRITEONCE, "pintool", "furu", "0", "Enable furu's memory access tracing");
 
 //static uint32_t cpu_khz = 2400000;
 //static float CYCLE_RESOLUTION = 2.4 * SEC_GHZ;
